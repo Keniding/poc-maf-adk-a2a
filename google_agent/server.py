@@ -53,7 +53,7 @@ def main():
     print(f"Agent card: http://localhost:{settings.a2a_port}/.well-known/agent.json")
     print(f"Using model: {settings.google_model}")
     print(f"\nADK commands available:")
-    print(f"  adk run google-agent")
+    print(f"  adk run google_agent")
     print(f"  adk web --port 8000")
 
     uvicorn.run(

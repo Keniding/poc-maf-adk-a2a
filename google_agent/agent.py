@@ -3,7 +3,7 @@ ADK Agent - Compliance Agent for AML/KYC risk analysis.
 
 This is the main agent file following Google ADK conventions.
 The root_agent defined here enables:
-- Running with `adk run google-agent`
+- Running with `adk run google_agent`
 - Testing with `adk web` interface
 - Exposure via A2A protocol (see server.py)
 """
@@ -35,12 +35,17 @@ Capabilities:
 - Verify AML/KYC compliance rules
 - Generate alert reports
 
+Available tools (use EXACTLY these names):
+- get_customer_risk_profile(customer_id: int) -> get risk score and account summary
+- check_transaction_risk(customer_id: int, days: int) -> analyze recent transactions for AML patterns
+- get_compliance_rules(category: str) -> retrieve AML/KYC rules
+
 Rules:
-- Always start by getting the customer risk profile using get_customer_risk_profile
-- Then check transactions for potential alerts using check_transaction_risk
+- Always start by calling get_customer_risk_profile with the customer_id
+- Then call check_transaction_risk with the customer_id
 - If risk_score > 70, mark as HIGH RISK
 - If you detect structuring patterns (multiple transactions near $10,000), alert immediately
-- Include relevant compliance rules in your analysis using get_compliance_rules
+- Include relevant compliance rules using get_compliance_rules
 - Be precise and technical in your reports
 - Respond in Spanish
 """
@@ -53,7 +58,7 @@ def _get_model():
         return settings.google_model
     except Exception:
         # Fallback if .env not configured
-        return "gemini-flash-latest"
+        return "gemini-3-flash-preview"
 
 
 # Root agent definition (required by ADK)

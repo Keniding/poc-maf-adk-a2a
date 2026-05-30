@@ -17,7 +17,7 @@ class Settings:
         default_factory=lambda: os.getenv("GOOGLE_API_KEY", "")
     )
     google_model: str = field(
-        default_factory=lambda: os.getenv("GOOGLE_MODEL", "gemini-flash-latest")
+        default_factory=lambda: os.getenv("GOOGLE_MODEL", "gemini-3-flash-preview")
     )
 
     # A2A Server
