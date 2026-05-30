@@ -190,36 +190,78 @@ async def demo_concurrent_flow():
         await compliance_client.close()
 
 
-async def demo_maf_workflow():
+async def demo_maf_workflows():
     """
-    Demo: MAF WorkflowBuilder sequential flow run directly (no extra server needed).
+    Demo: 3 MAF WorkflowBuilder patterns run directly (no port 8003 needed).
 
-    Builds a WorkflowBuilder chain inline:
-      AccountFetchExecutor → ComplianceFetchExecutor → SynthesisExecutor (Foundry)
+    Pattern 1 - Sequential (add_chain):
+      AccountFetch -> ComplianceFetch -> Synthesis
+
+    Pattern 2 - Parallel (fan-out + fan-in):
+      [AccountFetchParallel || ComplianceFetchParallel] -> ParallelSynthesis
+
+    Pattern 3 - Conditional (switch-case):
+      QueryRouter -> account-only | compliance-only | full chain
     """
-    print("\n" + "=" * 80)
-    print("DEMO: MAF WorkflowBuilder (direct — no port 8003 server needed)")
-    print("  AccountFetch → ComplianceFetch → Synthesis (Foundry/gpt-5.4-nano)")
-    print("=" * 80)
-
-    from agents.orchestrator import create_orchestrator, run_orchestration
+    from agents.orchestrator import (
+        create_sequential_workflow,
+        create_parallel_workflow,
+        create_conditional_workflow,
+        run_orchestration,
+    )
     from config.settings import Settings
 
     settings = Settings()
 
-    print("\n[1] Building MAF workflow...")
-    workflow = await create_orchestrator(settings)
-    print("  ✓ WorkflowBuilder chain: AccountFetch → ComplianceFetch → Synthesis")
-
-    customer_id = 1
-    query = f"Dame el análisis completo del cliente con ID {customer_id}: cuentas, transacciones y evaluación de riesgo AML/KYC"
-
-    print(f"\n[2] Running workflow for customer {customer_id}...")
+    # --- Pattern 1: Sequential ---
+    print("\n" + "=" * 80)
+    print("DEMO MAF [1/3]: Sequential (add_chain)")
+    print("  AccountFetch -> ComplianceFetch -> Synthesis (Foundry)")
+    print("=" * 80)
+    workflow = await create_sequential_workflow(settings)
+    query = "Dame el analisis completo del cliente con ID 1: cuentas, transacciones y riesgo AML"
+    print(f"\nQuery: {query}")
+    print("\nEjecutando workflow...")
     result = await run_orchestration(workflow, query)
-
-    print("\n[3] MAF Workflow Output (synthesized by Foundry):")
+    print("\nOutput:")
     print("-" * 80)
-    print(result)
+    print(result[:800] + ("..." if len(result) > 800 else ""))
+    print("=" * 80)
+
+    # --- Pattern 2: Parallel ---
+    print("\n" + "=" * 80)
+    print("DEMO MAF [2/3]: Parallel (fan-out + fan-in)")
+    print("  [AccountFetch || ComplianceFetch] -> ParallelSynthesis (Foundry)")
+    print("=" * 80)
+    workflow = await create_parallel_workflow(settings)
+    query = "Analiza al cliente con ID 2: estado de cuentas y evaluacion de riesgo AML"
+    print(f"\nQuery: {query}")
+    print("\nEjecutando workflow (ambos agentes en paralelo)...")
+    result = await run_orchestration(workflow, query)
+    print("\nOutput:")
+    print("-" * 80)
+    print(result[:800] + ("..." if len(result) > 800 else ""))
+    print("=" * 80)
+
+    # --- Pattern 3: Conditional ---
+    print("\n" + "=" * 80)
+    print("DEMO MAF [3/3]: Conditional (switch-case)")
+    print("  QueryRouter -> cuenta-only | compliance-only | full analysis")
+    print("=" * 80)
+    workflow = await create_conditional_workflow(settings)
+
+    cases = [
+        ("cuenta solo",      "Muestra las cuentas y saldo del cliente con ID 3"),
+        ("compliance solo",  "Analiza el riesgo AML y compliance del cliente con ID 4"),
+        ("analisis completo","Dame informacion del cliente con ID 1"),
+    ]
+
+    for case_name, q in cases:
+        print(f"\n  -- Caso: {case_name} --")
+        print(f"  Query: {q}")
+        result = await run_orchestration(workflow, q)
+        print(f"  Output (primeras 300 chars): {result[:300]}...")
+
     print("\n" + "=" * 80)
 
 
@@ -272,7 +314,7 @@ async def main():
     await demo_concurrent_flow()
     await asyncio.sleep(1)
 
-    await demo_maf_workflow()
+    await demo_maf_workflows()
 
     print("\n\n" + "=" * 80)
     print("DEMO COMPLETE")

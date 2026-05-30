@@ -1,8 +1,11 @@
 """
 A2A Server for MAF Orchestrator.
 
-Sequential workflow: AccountAgent → ComplianceAgent → MAF Synthesis (Foundry)
-Port 8003.
+Exposes 3 workflow patterns on port 8003.
+Pass "workflow_type" in params to select the pattern:
+  - "sequential"   (default) add_chain: account -> compliance -> synthesis
+  - "parallel"     fan-out + fan-in: [account || compliance] -> synthesis
+  - "conditional"  switch-case: routes by keyword -> account-only | compliance-only | full
 """
 
 import asyncio
@@ -16,24 +19,46 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from agents.orchestrator import create_orchestrator, run_orchestration
+from agents.orchestrator import (
+    create_conditional_workflow,
+    create_parallel_workflow,
+    create_sequential_workflow,
+    run_orchestration,
+)
 from config.settings import Settings
 
 
 async def create_app():
     settings = Settings()
-    workflow = await create_orchestrator(settings)
+
+    workflows = {
+        "sequential":  await create_sequential_workflow(settings),
+        "parallel":    await create_parallel_workflow(settings),
+        "conditional": await create_conditional_workflow(settings),
+    }
 
     agent_card = {
         "name": "MAF Orchestrator",
-        "description": "Banking orchestrator using Microsoft Agent Framework — sequential workflow: Account → Compliance → Synthesis",
+        "description": (
+            "Banking orchestrator using Microsoft Agent Framework WorkflowBuilder. "
+            "Supports 3 patterns: sequential (add_chain), "
+            "parallel (fan-out + fan-in), conditional (switch-case)."
+        ),
         "version": "1.0",
         "url": settings.a2a_url,
         "skills": [
             {
-                "name": "orchestrate_banking_query",
-                "description": "Full banking analysis: account info + AML/KYC compliance + synthesis",
-            }
+                "name": "orchestrate_sequential",
+                "description": "add_chain: account -> compliance -> Foundry synthesis",
+            },
+            {
+                "name": "orchestrate_parallel",
+                "description": "fan-out + fan-in: account || compliance -> Foundry synthesis",
+            },
+            {
+                "name": "orchestrate_conditional",
+                "description": "switch-case: routes by keyword to account-only, compliance-only, or full analysis",
+            },
         ],
     }
 
@@ -48,12 +73,25 @@ async def create_app():
 
         if method == "agent.invoke":
             user_query = params.get("input", "")
+            workflow_type = params.get("workflow_type", "sequential")
+
+            workflow = workflows.get(workflow_type)
+            if workflow is None:
+                return JSONResponse({
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "error": {
+                        "code": -32602,
+                        "message": f"Unknown workflow_type '{workflow_type}'. Valid: sequential, parallel, conditional",
+                    },
+                })
+
             try:
                 output = await run_orchestration(workflow, user_query)
                 return JSONResponse({
                     "jsonrpc": "2.0",
                     "id": req_id,
-                    "result": {"output": output},
+                    "result": {"output": output, "workflow_type": workflow_type},
                 })
             except Exception as exc:
                 return JSONResponse({
@@ -83,8 +121,10 @@ async def main():
 
     print(f"Starting MAF Orchestrator on port {settings.a2a_port}")
     print(f"Agent card: {settings.a2a_url}/.well-known/agent.json")
-    print(f"A2A endpoint: {settings.a2a_url}/a2a")
-    print(f"Workflow: AccountAgent({settings.account_agent_url}) → ComplianceAgent({settings.compliance_agent_url}) → Foundry({settings.foundry_model})")
+    print(f"Workflows available: sequential | parallel | conditional")
+    print(f"  Account Agent:    {settings.account_agent_url}")
+    print(f"  Compliance Agent: {settings.compliance_agent_url}")
+    print(f"  Foundry model:    {settings.foundry_model}")
 
     config = uvicorn.Config(app, host="0.0.0.0", port=settings.a2a_port, log_level="info")
     server = uvicorn.Server(config)
