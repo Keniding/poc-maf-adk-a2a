@@ -1,30 +1,24 @@
 """
 A2A Orchestrator Demo - Cross-Framework Agent Communication.
 
-This demo shows how Microsoft Agent Framework and Google ADK agents
-communicate via the A2A protocol.
-
-A2A Client Implementation:
-- Discovers agents via AgentCard (GET /.well-known/agent.json)
-- Invokes agents via JSON-RPC (POST /a2a with agent.invoke method)
-- Supports both sequential and concurrent flows
-- Framework-agnostic: works with any A2A-compliant agent
-
 Demo Flows:
 1. Sequential: Account Agent → Compliance Agent → Combined report
-2. Concurrent: Both agents execute in parallel for faster results
+2. Concurrent: Both agents in parallel
+3. MAF Workflow: WorkflowBuilder (Account → Compliance → Synthesis) run directly — no extra server needed
 
 Prerequisites:
-1. Both A2A servers must be running:
-   - Microsoft Account Agent on port 8002
-   - Google Compliance Agent on port 8001
-
-2. Database must be initialized:
-   - shared/database/banking.db
+  - Microsoft Account Agent on port 8002
+  - Google Compliance Agent on port 8001
+  - shared/database/banking.db initialized
 """
 
 import asyncio
+import sys
+from pathlib import Path
+
 import httpx
+
+sys.path.insert(0, str(Path(__file__).parent.parent / "maf-orchestrator"))
 
 
 class A2AClient:
@@ -169,10 +163,10 @@ async def demo_concurrent_flow():
 
         # Run both queries in parallel
         account_task = account_client.invoke(
-            f"Dame información del cliente {customer_id} y sus cuentas"
+            f"Busca al cliente con ID {customer_id} y muéstrame sus cuentas y transacciones"
         )
         compliance_task = compliance_client.invoke(
-            f"Analiza el riesgo del cliente {customer_id}"
+            f"Analiza el riesgo AML/KYC del cliente con ID {customer_id}"
         )
 
         # Wait for both
@@ -196,75 +190,89 @@ async def demo_concurrent_flow():
         await compliance_client.close()
 
 
+async def demo_maf_workflow():
+    """
+    Demo: MAF WorkflowBuilder sequential flow run directly (no extra server needed).
+
+    Builds a WorkflowBuilder chain inline:
+      AccountFetchExecutor → ComplianceFetchExecutor → SynthesisExecutor (Foundry)
+    """
+    print("\n" + "=" * 80)
+    print("DEMO: MAF WorkflowBuilder (direct — no port 8003 server needed)")
+    print("  AccountFetch → ComplianceFetch → Synthesis (Foundry/gpt-5.4-nano)")
+    print("=" * 80)
+
+    from agents.orchestrator import create_orchestrator, run_orchestration
+    from config.settings import Settings
+
+    settings = Settings()
+
+    print("\n[1] Building MAF workflow...")
+    workflow = await create_orchestrator(settings)
+    print("  ✓ WorkflowBuilder chain: AccountFetch → ComplianceFetch → Synthesis")
+
+    customer_id = 1
+    query = f"Dame el análisis completo del cliente con ID {customer_id}: cuentas, transacciones y evaluación de riesgo AML/KYC"
+
+    print(f"\n[2] Running workflow for customer {customer_id}...")
+    result = await run_orchestration(workflow, query)
+
+    print("\n[3] MAF Workflow Output (synthesized by Foundry):")
+    print("-" * 80)
+    print(result)
+    print("\n" + "=" * 80)
+
+
 async def demo_health_check():
-    """Check if both A2A servers are running."""
+    """Check which A2A servers are running."""
     print("\n" + "=" * 80)
     print("HEALTH CHECK - Verifying A2A Servers")
     print("=" * 80)
 
-    account_client = A2AClient("http://localhost:8002")
-    compliance_client = A2AClient("http://localhost:8001")
+    servers = {
+        "Account Agent":    ("http://localhost:8002", "cd microsoft-agent && python server.py"),
+        "Compliance Agent": ("http://localhost:8001", "C:\\Users\\User\\miniconda3\\python.exe google_agent/server.py"),
+    }
 
-    try:
-        # Check account agent
+    running = {}
+    for name, (url, cmd) in servers.items():
+        client = A2AClient(url)
         try:
-            account_card = await account_client.get_agent_card()
-            print(f"\n✓ Account Agent (port 8002): RUNNING")
-            print(f"  Name: {account_card['name']}")
-            print(f"  Description: {account_card['description']}")
-        except Exception as e:
-            print(f"\n✗ Account Agent (port 8002): NOT RUNNING")
-            print(f"  Error: {e}")
-            print("\n  Start with: cd microsoft-agent && python server.py")
-            return False
+            card = await client.get_agent_card()
+            print(f"\n✓ {name} ({url.split(':')[-1]}): RUNNING — {card['name']}")
+            running[name] = True
+        except Exception:
+            print(f"\n✗ {name} ({url.split(':')[-1]}): NOT RUNNING")
+            print(f"  Start: {cmd}")
+            running[name] = False
+        finally:
+            await client.close()
 
-        # Check compliance agent
-        try:
-            compliance_card = await compliance_client.get_agent_card()
-            print(f"\n✓ Compliance Agent (port 8001): RUNNING")
-            print(f"  Name: {compliance_card['name']}")
-            print(f"  Description: {compliance_card['description']}")
-        except Exception as e:
-            print(f"\n✗ Compliance Agent (port 8001): NOT RUNNING")
-            print(f"  Error: {e}")
-            print("\n  Start with: cd google-agent && python server.py")
-            return False
-
-        print("\n" + "=" * 80)
-        print("✓ All A2A servers are running")
-        return True
-
-    finally:
-        await account_client.close()
-        await compliance_client.close()
+    print("\n" + "=" * 80)
+    core_ready = running.get("Account Agent") and running.get("Compliance Agent")
+    return running, core_ready
 
 
 async def main():
     """Run demo flows."""
     print("\n" + "=" * 80)
     print("A2A ORCHESTRATION DEMO")
-    print("Cross-Framework Agent Communication")
-    print("Microsoft Agent Framework ↔ Google ADK")
+    print("Microsoft Agent Framework ↔ Google ADK ↔ MAF Workflow")
     print("=" * 80)
 
-    # Health check first
-    servers_running = await demo_health_check()
+    running, core_ready = await demo_health_check()
 
-    if not servers_running:
-        print("\n⚠️  Please start both A2A servers before running demos")
+    if not core_ready:
+        print("\n⚠  Please start Account Agent and Compliance Agent first")
         return
 
-    # Run demos
-    print("\n\nRunning demos...")
-
-    # Demo 1: Sequential
     await demo_sequential_flow()
+    await asyncio.sleep(1)
 
-    # Wait a bit
-    await asyncio.sleep(2)
-
-    # Demo 2: Concurrent
     await demo_concurrent_flow()
+    await asyncio.sleep(1)
+
+    await demo_maf_workflow()
 
     print("\n\n" + "=" * 80)
     print("DEMO COMPLETE")
