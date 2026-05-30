@@ -1,8 +1,5 @@
-# Foundry Hosted Agent - Compliance Agent dependencies
-# These are installed inside the Foundry Agent Service container on deploy.
-# Pinned to match the main project's .venv to avoid version conflicts.
-
 agent-framework>=1.7.0
 azure-ai-projects>=2.0.0
 azure-identity>=1.19.0
-aiosqlite>=0.20.0
+starlette>=0.41.0
+uvicorn>=0.32.0
