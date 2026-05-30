@@ -1,9 +1,9 @@
-# Microsoft Agent Framework
-agent-framework==1.7.0
+# Azure AI Foundry
+azure-ai-projects>=2.2.0,<3.0
+azure-identity>=1.21.0,<2.0
 
-# Azure dependencies (included with agent-framework)
-# azure-identity
-# azure-ai-projects
+# OpenAI SDK (used by azure-ai-projects)
+openai>=2.0.0,<3.0
 
 # Core dependencies
 python-dotenv>=1.0,<2

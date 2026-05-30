@@ -1,153 +1,150 @@
-"""
-Account Agent - Microsoft Agent Framework with FoundryAgent v2.
+"""Account Agent - Azure AI Foundry with OpenAI tool calling."""
 
-This agent:
-- Uses Microsoft Agent Framework with FoundryAgent v2
-- Connects to published agent in Azure AI Foundry
-- Exposes via A2A protocol for cross-framework communication
-- Handles customer queries, accounts, and transactions
-
-FoundryAgent v2:
-- Agent definition (instructions, model) hosted in Azure AI Foundry
-- Tools implemented locally and provided at runtime
-- Server-side execution with local tool callbacks
-
-A2A Protocol:
-- AgentCard published at /.well-known/agent.json via A2aAgentExecutor
-- Supports streaming responses
-- Skills-based capability discovery
-- Task queue and executor managed by agent-framework
-"""
-
-from agent_framework.foundry import FoundryAgent
-
-from agents.tools import (
-    get_account_transactions,
-    get_customer_accounts,
-    search_customer,
-    search_products,
-)
-from config.settings import Settings, get_azure_credential
-
-ACCOUNT_AGENT_TOOLS = [
-    search_customer,
-    get_customer_accounts,
-    get_account_transactions,
-    search_products,
-]
+import inspect
+import json
+from typing import Callable
 
 
-async def create_account_agent(settings: Settings | None = None):
-    """
-    Create Account Agent using FoundryAgent v2.
+INSTRUCTIONS = """\
+Eres un especialista bancario de cuentas para Interbank.
 
-    This agent will be exposed via A2A protocol through A2aAgentExecutor in server.py.
+Capacidades:
+- Buscar clientes por nombre, email o teléfono
+- Consultar cuentas y balances de clientes
+- Revisar historial de transacciones
+- Recomendar productos bancarios
 
-    FoundryAgent v2 Pattern:
-    - Agent definition (instructions, model) published in Azure AI Foundry
-    - Tools implemented locally and registered at runtime
-    - Server-side LLM execution with local tool callbacks
+Herramientas disponibles (usa EXACTAMENTE estos nombres):
+- search_customer(query: str) -> busca clientes por nombre/email/teléfono
+- get_customer_accounts(customer_id: int) -> lista cuentas y balances del cliente
+- get_account_transactions(account_id: int, limit: int) -> historial de transacciones
+- search_products(product_type: str) -> busca productos bancarios disponibles
 
-    A2A Integration:
-    - Wrapped by A2aAgentExecutor in server.py
-    - AgentCard auto-generated from agent metadata
-    - Supports streaming and task cancellation
-    - Skills derived from tool definitions
-
-    Args:
-        settings: Configuration settings
-
-    Returns:
-        FoundryAgent instance ready for A2A exposure
-    """
-    if settings is None:
-        settings = Settings()
-
-    credential = get_azure_credential(settings)
-
-    agent = FoundryAgent(
-        project_endpoint=settings.foundry_project_endpoint,
-        agent_name=settings.foundry_agent_name,
-        agent_version=settings.foundry_agent_version,
-        credential=credential,
-        tools=ACCOUNT_AGENT_TOOLS,
-        description="Banking account specialist for customer queries, balances, and transactions.",
-    )
-
-    return agent
-
-
-async def publish_agent(settings: Settings | None = None):
-    """
-    Publish Account Agent to Azure AI Foundry.
-
-    Converts local agent definition to PromptAgentDefinition
-    and versions it in Foundry for consumption via FoundryAgent v2.
-
-    Args:
-        settings: Configuration settings
-
-    Returns:
-        Created agent version
-    """
-    if settings is None:
-        settings = Settings()
-
-    from agent_framework import Agent
-    from agent_framework.foundry import FoundryChatClient, to_prompt_agent
-    from azure.ai.projects.aio import AIProjectClient
-    from azure.identity.aio import AzureCliCredential
-
-    INSTRUCTIONS = """\
-You are a banking account specialist for Interbank.
-
-Capabilities:
-- Search customers by name, email, or phone
-- Query customer accounts and balances
-- Review transaction history
-- Recommend banking products
-
-Rules:
-- Always identify the customer first using search_customer
-- Present information clearly and organized
-- If you find flagged transactions, mention them but do not perform risk analysis (compliance agent handles that)
-- Be professional and helpful
-- Respond in Spanish
+Reglas:
+- Siempre identifica primero al cliente con search_customer
+- Presenta la información de forma clara y organizada
+- Si encuentras transacciones marcadas, menciónalas pero no hagas análisis de riesgo
+- Sé profesional y útil
+- Responde en español
 """
 
-    async with AzureCliCredential() as credential:
-        client = FoundryChatClient(
-            project_endpoint=settings.foundry_project_endpoint,
-            model=settings.foundry_model,
-            credential=credential,
-        )
+_TYPE_MAP = {int: "integer", str: "string", float: "number", bool: "boolean"}
 
-        agent = Agent(
-            client=client,
-            name=settings.foundry_agent_name,
-            description="Banking account specialist for customer queries.",
-            instructions=INSTRUCTIONS,
-            tools=ACCOUNT_AGENT_TOOLS,
-            default_options={"temperature": 0.3, "top_p": 0.95},
-        )
 
-        definition = to_prompt_agent(agent)
+def _func_to_tool_schema(func: Callable) -> dict:
+    """Convert a Python function to an OpenAI tool schema."""
+    sig = inspect.signature(func)
+    doc = inspect.getdoc(func) or ""
+    description = doc.split("\n")[0] if doc else func.__name__
 
-        async with AIProjectClient(
-            endpoint=settings.foundry_project_endpoint,
-            credential=credential,
-        ) as project_client:
-            created = await project_client.agents.create_version(
-                agent_name=agent.name,
-                definition=definition,
-                description=agent.description,
+    properties = {}
+    required = []
+    for name, param in sig.parameters.items():
+        json_type = _TYPE_MAP.get(param.annotation, "string")
+        properties[name] = {"type": json_type}
+        if param.default is inspect.Parameter.empty:
+            required.append(name)
+
+    return {
+        "type": "function",
+        "function": {
+            "name": func.__name__,
+            "description": description,
+            "parameters": {
+                "type": "object",
+                "properties": properties,
+                "required": required,
+            },
+        },
+    }
+
+
+class AccountAgent:
+    """Account agent using Azure AI Foundry via OpenAI-compatible API."""
+
+    def __init__(self, openai_client, model: str, tools: list[Callable]):
+        self.openai = openai_client
+        self.model = model
+        self._tool_map = {t.__name__: t for t in tools}
+        self._tool_schemas = [_func_to_tool_schema(t) for t in tools]
+
+    async def run(self, user_message: str) -> str:
+        """Run agent with tool calling loop."""
+        messages = [
+            {"role": "system", "content": INSTRUCTIONS},
+            {"role": "user", "content": user_message},
+        ]
+
+        for _ in range(10):
+            response = await self.openai.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                tools=self._tool_schemas,
+                tool_choice="auto",
             )
-            print(f"Published: {created.name} v{created.version}")
-            return created
+
+            choice = response.choices[0]
+            messages.append(choice.message.model_dump(exclude_none=True))
+
+            if choice.finish_reason == "stop":
+                return choice.message.content or ""
+
+            if choice.finish_reason == "tool_calls":
+                for tool_call in choice.message.tool_calls:
+                    func_name = tool_call.function.name
+                    func = self._tool_map.get(func_name)
+                    if func is None:
+                        result = f"Error: tool '{func_name}' not found"
+                    else:
+                        try:
+                            args = json.loads(tool_call.function.arguments)
+                            result = func(**args)
+                        except Exception as e:
+                            result = f"Error executing {func_name}: {e}"
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": str(result),
+                    })
+
+        return "El agente alcanzó el límite de iteraciones."
 
 
-if __name__ == "__main__":
-    import asyncio
+async def create_account_agent(settings=None):
+    """Create AccountAgent connected to Azure AI Foundry."""
+    from agents.tools import (
+        get_account_transactions,
+        get_customer_accounts,
+        search_customer,
+        search_products,
+    )
+    from config.settings import Settings
 
-    # Example: Publish agent to Foundry
-    asyncio.run(publish_agent())
+    if settings is None:
+        settings = Settings()
+
+    tools = [search_customer, get_customer_accounts, get_account_transactions, search_products]
+
+    base_url = f"{settings.foundry_project_endpoint.rstrip('/')}/openai/v1"
+
+    if settings.foundry_api_key:
+        from openai import AsyncOpenAI
+        openai_client = AsyncOpenAI(
+            api_key=settings.foundry_api_key,
+            base_url=base_url,
+        )
+    else:
+        from azure.identity import AzureCliCredential, get_bearer_token_provider
+        from openai import AsyncOpenAI
+        credential = AzureCliCredential()
+        _sync_token_provider = get_bearer_token_provider(credential, "https://ai.azure.com/.default")
+
+        async def async_token_provider() -> str:
+            return _sync_token_provider()
+
+        openai_client = AsyncOpenAI(
+            api_key=async_token_provider,
+            base_url=base_url,
+        )
+
+    return AccountAgent(openai_client=openai_client, model=settings.foundry_model, tools=tools)

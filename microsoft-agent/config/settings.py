@@ -1,4 +1,4 @@
-"""Microsoft Agent Framework - Configuration."""
+"""Microsoft Agent - Configuration."""
 
 import os
 from dataclasses import dataclass, field
@@ -8,11 +8,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-CredentialType = Literal[
-    "AzureCliCredential",
-    "ManagedIdentityCredential",
-    "DefaultAzureCredential",
-]
+CredentialType = Literal["AzureCliCredential", "ManagedIdentityCredential", "DefaultAzureCredential"]
 
 
 @dataclass
@@ -29,11 +25,11 @@ class Settings:
     foundry_agent_name: str = field(
         default_factory=lambda: os.getenv("FOUNDRY_AGENT_NAME", "account-agent")
     )
-    foundry_agent_version: str = field(
-        default_factory=lambda: os.getenv("FOUNDRY_AGENT_VERSION", "1.0")
-    )
 
-    # Identity
+    # Auth: API key (simple) or Azure credential (recommended)
+    foundry_api_key: str = field(
+        default_factory=lambda: os.getenv("FOUNDRY_API_KEY", "")
+    )
     credential_type: CredentialType = field(
         default_factory=lambda: os.getenv("AZURE_CREDENTIAL_TYPE", "AzureCliCredential")  # type: ignore[return-value]
     )
@@ -50,17 +46,25 @@ class Settings:
     def a2a_url(self) -> str:
         return f"http://localhost:{self.a2a_port}"
 
+    def validate(self):
+        if not self.foundry_project_endpoint:
+            raise ValueError("FOUNDRY_PROJECT_ENDPOINT is required.")
+        if not self.foundry_api_key and self.credential_type == "AzureCliCredential":
+            import subprocess
+            result = subprocess.run(["az", "account", "show"], capture_output=True)
+            if result.returncode != 0:
+                raise ValueError(
+                    "No FOUNDRY_API_KEY set and Azure CLI is not logged in. "
+                    "Run 'az login' or set FOUNDRY_API_KEY in .env"
+                )
+
 
 def get_azure_credential(settings: Settings | None = None):
     """Get Azure credential based on configuration."""
     if settings is None:
         settings = Settings()
 
-    from azure.identity import (
-        AzureCliCredential,
-        DefaultAzureCredential,
-        ManagedIdentityCredential,
-    )
+    from azure.identity import AzureCliCredential, DefaultAzureCredential, ManagedIdentityCredential
 
     match settings.credential_type:
         case "AzureCliCredential":
