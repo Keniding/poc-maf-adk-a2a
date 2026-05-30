@@ -1,68 +1,129 @@
 """
 A2A Server for Google Compliance Agent.
 
-This server exposes the Google ADK Agent via A2A protocol on port 8001.
-
-A2A Protocol Implementation:
-- Uses to_a2a() helper from google.adk.a2a.utils
-- Automatically generates AgentCard at /.well-known/agent.json
-- Supports JSON-RPC methods: agent.invoke, agent.stream, agent.cancel
-- Creates task queue and executor automatically
-- Enables cross-framework communication with any A2A client
-
-Architecture:
-- Google ADK Agent executes locally with Gemini models
-- to_a2a() helper wraps agent and creates Starlette ASGI app
-- All A2A protocol components auto-configured
-- Tools executed locally when called by agent
+Exposes compliance_agent via A2A protocol on port 8001:
+- GET  /.well-known/agent.json  -> AgentCard (discovery)
+- POST /a2a                     -> JSON-RPC (agent.invoke)
 """
 
+import asyncio
 import sys
 from pathlib import Path
 
-# Add parent directories to path
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent.parent / "shared"))
 
-import uvicorn
-from google.adk.a2a.utils.agent_to_a2a import to_a2a
+from google.adk.runners import InMemoryRunner
+from google.genai import types as genai_types
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.routing import Route
 
 from agent import root_agent
 from config.settings import Settings
 
 
-def main():
-    """Run A2A server."""
+async def run_agent(runner: InMemoryRunner, user_message: str) -> str:
+    """Run agent and collect the final text response."""
+    session = await runner.session_service.create_session(
+        app_name=runner.app_name,
+        user_id="a2a_user",
+    )
+
+    content = genai_types.Content(
+        role="user",
+        parts=[genai_types.Part(text=user_message)],
+    )
+
+    final_text = ""
+    async for event in runner.run_async(
+        user_id="a2a_user",
+        session_id=session.id,
+        new_message=content,
+    ):
+        if event.is_final_response() and event.content and event.content.parts:
+            for part in event.content.parts:
+                if hasattr(part, "text") and part.text:
+                    final_text += part.text
+
+    return final_text or "No response generated."
+
+
+async def create_app():
+    """Create A2A Starlette application."""
     settings = Settings()
-    settings.validate()
 
-    # Create A2A app using Google ADK's to_a2a() helper
-    # This automatically:
-    # - Generates AgentCard at /.well-known/agent.json
-    # - Sets up task queue and executor
-    # - Configures streaming support
-    # - Publishes skills from agent tools
-    app = to_a2a(
-        root_agent,
-        host="localhost",
-        port=settings.a2a_port,
-        protocol="http",
+    runner = InMemoryRunner(
+        agent=root_agent,
+        app_name="compliance_agent",
     )
 
-    print(f"Starting Google Compliance Agent A2A Server on port {settings.a2a_port}")
-    print(f"Agent card: http://localhost:{settings.a2a_port}/.well-known/agent.json")
-    print(f"Using model: {settings.google_model}")
-    print(f"\nADK commands available:")
-    print(f"  adk run google_agent")
-    print(f"  adk web --port 8000")
+    agent_card = {
+        "name": "Compliance Agent",
+        "description": "AML/KYC compliance specialist for banking risk analysis",
+        "version": "1.0",
+        "url": settings.a2a_url,
+        "skills": [
+            {"name": "get_customer_risk_profile", "description": "Get customer risk score and profile"},
+            {"name": "check_transaction_risk", "description": "Analyze transactions for AML patterns"},
+            {"name": "get_compliance_rules", "description": "Get AML/KYC compliance rules"},
+        ],
+    }
 
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=settings.a2a_port,
-        log_level="info",
-    )
+    async def handle_agent_card(request: Request):
+        return JSONResponse(agent_card)
+
+    async def handle_a2a(request: Request):
+        body = await request.json()
+        method = body.get("method")
+        params = body.get("params", {})
+        req_id = body.get("id", 1)
+
+        if method == "agent.invoke":
+            input_text = params.get("input", "")
+            try:
+                output = await run_agent(runner, input_text)
+                return JSONResponse({
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "result": {"output": output},
+                })
+            except Exception as e:
+                return JSONResponse({
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "error": {"code": -32603, "message": str(e)},
+                })
+
+        return JSONResponse({
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "error": {"code": -32601, "message": f"Method '{method}' not supported"},
+        })
+
+    app = Starlette(routes=[
+        Route("/.well-known/agent.json", handle_agent_card),
+        Route("/a2a", handle_a2a, methods=["POST"]),
+    ])
+
+    return app, settings
+
+
+async def main():
+    import uvicorn
+
+    app, settings = await create_app()
+
+    print(f"Starting Google Compliance Agent on port {settings.a2a_port}")
+    print(f"Agent card: {settings.a2a_url}/.well-known/agent.json")
+    print(f"A2A endpoint: {settings.a2a_url}/a2a")
+    print(f"Model: {settings.google_model}")
+
+    config = uvicorn.Config(app, host="0.0.0.0", port=settings.a2a_port, log_level="info")
+    server = uvicorn.Server(config)
+    await server.serve()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
