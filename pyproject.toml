@@ -1,0 +1,35 @@
+[project]
+name = "poc-maf-adk-a2a"
+version = "1.0.0"
+description = "POC: P2P Agent Orchestration - Microsoft Agent Framework + Google ADK via A2A Protocol"
+requires-python = ">=3.12"
+dependencies = [
+    # Core dependencies (framework-agnostic)
+    # Azure Identity
+    "azure-identity>=1.21.0,<2.0",
+    "azure-ai-projects>=2.1.0,<3.0",
+
+    # Infrastructure
+    "starlette>=0.49.1,<1",
+    "uvicorn>=0.34,<1",
+    "httpx>=0.27,<1",
+    "pydantic>=2.12,<3",
+
+    # Database
+    "aiosqlite>=0.21.0,<1.0",
+
+    # Utilities
+    "python-dotenv>=1.0,<2",
+    "rich>=13.0,<14",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+]
+
+# NOTE: Microsoft and Google frameworks have INCOMPATIBLE a2a-sdk requirements
+# Use separate requirements files to install them:
+# - requirements-microsoft.txt for Microsoft Agent Framework
+# - requirements-google.txt for Google ADK
